@@ -1,0 +1,73 @@
+// Modified fork function
+int fork(void)
+{
+  int pid;
+  struct proc *np;
+
+  // Allocate process.
+  if((np = allocproc()) == 0)
+    return -1;
+
+  // Copy process state from parent.
+  if((np->pgdir = copyuvm(proc->pgdir, proc->sz)) == 0){
+    kfree(np->kstack);
+    np->kstack = 0;
+    np->state = UNUSED;
+    return -1;
+  }
+  np->sz = proc->sz;
+  np->parent = proc;
+  *np->tf = *proc->tf;
+
+  // Set child's priority based on parent's priority.
+  if(proc->priority >= 15)
+    np->priority = proc->priority / 2;
+  else
+    np->priority = proc->priority + 1;
+
+  // Clear %eax so that fork returns 0 in the child.
+  np->tf->eax = 0;
+
+  // Increment reference counts on open file descriptors.
+  for(int i = 0; i < NOFILE; i++)
+    if(proc->ofile[i])
+      np->ofile[i] = filedup(proc->ofile[i]);
+  np->cwd = idup(proc->cwd);
+
+  safestrcpy(np->name, proc->name, sizeof(proc->name));
+  
+  pid = np->pid;
+
+  // Acquire the process lock to protect against race conditions.
+  acquire(&ptable.lock);
+  
+  // Add the new process to the process table.
+  np->state = RUNNABLE;
+  insertprocess(np);
+  
+  // Release the process lock and return the child's PID.
+  release(&ptable.lock);
+  return pid;
+}
+
+// Modified yield function
+void yield(void)
+{
+  acquire(&ptable.lock);  // Process table lock
+  
+  // Update the current process's priority based on the nice value.
+  proc->priority = (proc->priority + (proc->nice * 2) + 40) / 41;
+
+  // If there is no higher priority process, return without yielding.
+  if(highestpriority() <= proc->priority){
+    release(&ptable.lock);
+    return;
+  }
+
+  // Move the current process to the end of the queue and run the highest priority process.
+  proc->state = RUNNABLE;
+  insertprocess(proc);
+  sched();
+  
+  release(&ptable.lock);
+}
